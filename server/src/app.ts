@@ -59,6 +59,7 @@ import { pluginRegistryService } from "./services/plugin-registry.js";
 import { createHostClientHandlers } from "@paperclipai/plugin-sdk";
 import type { BetterAuthSessionResult } from "./auth/better-auth.js";
 import { createCachedViteHtmlRenderer } from "./vite-html-renderer.js";
+import { createAutoArchiveService } from "./services/auto-archive.js";
 
 type UiMode = "none" | "static" | "vite-dev";
 const FEEDBACK_EXPORT_FLUSH_INTERVAL_MS = 5_000;
@@ -404,6 +405,7 @@ export async function createApp(
 
   jobCoordinator.start();
   scheduler.start();
+  const stopAutoArchive = createAutoArchiveService(db).start();
   const feedbackExportTimer = opts.feedbackExportService
     ? setInterval(() => {
       void opts.feedbackExportService?.flushPendingFeedbackTraces().catch((err) => {
@@ -437,6 +439,7 @@ export async function createApp(
     logger.error({ err }, "Failed to load ready plugins on startup");
   });
   process.once("exit", () => {
+    stopAutoArchive();
     if (feedbackExportTimer) clearInterval(feedbackExportTimer);
     devWatcher?.close();
     viteHtmlRenderer?.dispose();

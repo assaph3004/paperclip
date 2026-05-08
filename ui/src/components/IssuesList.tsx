@@ -60,7 +60,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
-import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, ListTree, Columns3, User, Search, CircleSlash2 } from "lucide-react";
+import { CircleDot, Plus, ArrowUpDown, Layers, Check, ChevronRight, List, ListTree, Columns3, User, Search, CircleSlash2, Archive } from "lucide-react";
 import { KanbanBoard } from "./KanbanBoard";
 import { buildIssueTree, countDescendants } from "../lib/issue-tree";
 import { buildSubIssueDefaultsForViewer } from "../lib/subIssueDefaults";
@@ -378,6 +378,8 @@ interface IssuesListProps {
   onLoadMoreIssues?: () => void;
   onSearchChange?: (search: string) => void;
   onUpdateIssue: (id: string, data: Record<string, unknown>) => void;
+  showArchived?: boolean;
+  onShowArchivedChange?: (show: boolean) => void;
 }
 
 function IssueSearchInput({
@@ -585,6 +587,8 @@ export function IssuesList({
   onLoadMoreIssues,
   onSearchChange,
   onUpdateIssue,
+  showArchived = false,
+  onShowArchivedChange,
 }: IssuesListProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const { selectedCompanyId } = useCompany();
@@ -1346,6 +1350,18 @@ export function IssuesList({
             iconOnly
             workspaces={isolatedWorkspacesEnabled ? workspaceOptions : undefined}
           />
+
+          {onShowArchivedChange && (
+            <Button
+              variant={showArchived ? "secondary" : "outline"}
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              title={showArchived ? "Hide archived issues" : "Show archived issues"}
+              onClick={() => onShowArchivedChange(!showArchived)}
+            >
+              <Archive className="h-3.5 w-3.5" />
+            </Button>
+          )}
 
           {/* Sort (list view only) */}
           {viewState.viewMode === "list" && (
