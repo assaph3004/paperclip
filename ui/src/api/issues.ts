@@ -250,4 +250,10 @@ export const issuesApi = {
   updateWorkProduct: (id: string, data: Record<string, unknown>) =>
     api.patch<IssueWorkProduct>(`/work-products/${id}`, data),
   deleteWorkProduct: (id: string) => api.delete<IssueWorkProduct>(`/work-products/${id}`),
+  countUnread: (companyId: string, status?: string) => {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    const qs = params.toString();
+    return api.get<{ count: number }>(`/companies/${companyId}/issues/unread-count${qs ? `?${qs}` : ""}`);
+  },
 };
