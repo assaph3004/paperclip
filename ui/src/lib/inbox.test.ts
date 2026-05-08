@@ -18,6 +18,8 @@ import {
   buildInboxDismissedAtByKey,
   computeInboxBadgeData,
   filterInboxIssues,
+  isIssueDoneExpired,
+  isIssueHiddenFromInbox,
   getArchivedInboxSearchIssues,
   getAvailableInboxIssueColumns,
   getInboxWorkItemKey,
@@ -1466,5 +1468,83 @@ describe("inbox helpers", () => {
     expect(shouldResetInboxWorkspaceGrouping("workspace", false, true)).toBe(true);
     expect(shouldResetInboxWorkspaceGrouping("workspace", true, true)).toBe(false);
     expect(shouldResetInboxWorkspaceGrouping("none", false, true)).toBe(false);
+  });
+
+  describe("isIssueDoneExpired", () => {
+    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+    const now = new Date("2026-03-11T12:00:00.000Z").getTime();
+
+    it("returns true for a done issue whose completedAt is older than 3 days", () => {
+      const issue = {
+        status: "done" as const,
+        completedAt: new Date(now - THREE_DAYS_MS - 1000),
+      };
+      expect(isIssueDoneExpired(issue, now)).toBe(true);
+    });
+
+    it("returns false for a done issue completed within the last 3 days", () => {
+      const issue = {
+        status: "done" as const,
+        completedAt: new Date(now - THREE_DAYS_MS + 60_000),
+      };
+      expect(isIssueDoneExpired(issue, now)).toBe(false);
+    });
+
+    it("returns false for a non-done issue regardless of completedAt", () => {
+      const issue = {
+        status: "in_progress" as const,
+        completedAt: new Date(now - 7 * 24 * 60 * 60 * 1000),
+      };
+      expect(isIssueDoneExpired(issue, now)).toBe(false);
+    });
+
+    it("returns false for a done issue with null completedAt", () => {
+      const issue = {
+        status: "done" as const,
+        completedAt: null,
+      };
+      expect(isIssueDoneExpired(issue, now)).toBe(false);
+    });
+  });
+
+  describe("isIssueHiddenFromInbox", () => {
+    it("returns true when hiddenAt is set", () => {
+      expect(isIssueHiddenFromInbox({ hiddenAt: new Date("2026-03-11T00:00:00.000Z") })).toBe(true);
+    });
+
+    it("returns false when hiddenAt is null", () => {
+      expect(isIssueHiddenFromInbox({ hiddenAt: null })).toBe(false);
+    });
+  });
+
+  it("filterInboxIssues excludes hidden and done-expired issues alongside routine executions", () => {
+    const now = new Date("2026-03-11T12:00:00.000Z").getTime();
+    const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+
+    const visibleIssue = makeIssue("visible", false);
+
+    const hiddenIssue = { ...makeIssue("hidden", false), hiddenAt: new Date("2026-03-01T00:00:00.000Z") };
+
+    const expiredDone = {
+      ...makeIssue("expired-done", false),
+      status: "done" as const,
+      completedAt: new Date(now - THREE_DAYS_MS - 1000),
+    };
+
+    const recentDone = {
+      ...makeIssue("recent-done", false),
+      status: "done" as const,
+      completedAt: new Date(now - 60_000),
+    };
+
+    const routineIssue = { ...makeIssue("routine", false), originKind: "routine_execution" as const };
+
+    const result = filterInboxIssues(
+      [visibleIssue, hiddenIssue, expiredDone, recentDone, routineIssue],
+      true,
+      now,
+    );
+
+    expect(result.map((i) => i.id)).toEqual(["visible", "recent-done"]);
   });
 });
