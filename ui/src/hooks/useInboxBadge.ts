@@ -12,7 +12,6 @@ import { queryKeys } from "../lib/queryKeys";
 import {
   buildInboxDismissedAtByKey,
   computeInboxBadgeData,
-  getRecentTouchedIssues,
   loadDismissedInboxAlerts,
   saveDismissedInboxAlerts,
   loadReadInboxItems,
@@ -21,7 +20,6 @@ import {
 } from "../lib/inbox";
 
 const INBOX_ISSUE_STATUSES = "backlog,todo,in_progress,in_review,blocked,done";
-const INBOX_BADGE_ISSUE_LIMIT = 500;
 const INBOX_BADGE_HEARTBEAT_RUN_LIMIT = 200;
 
 export function useDismissedInboxAlerts() {
@@ -174,19 +172,16 @@ export function useInboxBadge(companyId: string | null | undefined) {
     enabled: !!companyId,
   });
 
-  const { data: mineIssuesRaw = [] } = useQuery({
-    queryKey: queryKeys.issues.listMineByMe(companyId!),
-    queryFn: () =>
-      issuesApi.list(companyId!, {
-        touchedByUserId: "me",
-        inboxArchivedByUserId: "me",
-        status: INBOX_ISSUE_STATUSES,
-        limit: INBOX_BADGE_ISSUE_LIMIT,
-      }),
+  const { data: mineIssueCount = 0 } = useQuery({
+    queryKey: [...queryKeys.issues.listMineByMe(companyId!), "unread-count"],
+    queryFn: async () => {
+      const result = await issuesApi.countUnread(companyId!, INBOX_ISSUE_STATUSES);
+      return result.count;
+    },
     enabled: !!companyId,
+    refetchInterval: 60_000,
   });
 
-  const mineIssues = useMemo(() => getRecentTouchedIssues(mineIssuesRaw), [mineIssuesRaw]);
   const currentUserId = session?.user.id ?? session?.session.userId ?? null;
 
   const { data: heartbeatRuns = [] } = useQuery({
@@ -202,11 +197,11 @@ export function useInboxBadge(companyId: string | null | undefined) {
         joinRequests,
         dashboard,
         heartbeatRuns,
-        mineIssues,
+        mineIssueCount,
         dismissedAlerts,
         dismissedAtByKey,
         currentUserId,
       }),
-    [approvals, joinRequests, dashboard, heartbeatRuns, mineIssues, dismissedAlerts, dismissedAtByKey, currentUserId],
+    [approvals, joinRequests, dashboard, heartbeatRuns, mineIssueCount, dismissedAlerts, dismissedAtByKey, currentUserId],
   );
 }
