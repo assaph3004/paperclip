@@ -1360,6 +1360,18 @@ export function issueRoutes(
     res.json(result);
   });
 
+  router.get("/companies/:companyId/issues/unread-count", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    if (req.actor.type !== "board" || !req.actor.userId) {
+      res.status(403).json({ error: "unread-count requires board authentication" });
+      return;
+    }
+    const status = req.query.status as string | undefined;
+    const count = await svc.countUnreadTouchedByUser(companyId, req.actor.userId, status);
+    res.json({ count });
+  });
+
   router.get("/companies/:companyId/issues", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
