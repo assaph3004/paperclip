@@ -123,6 +123,14 @@ export const issues = pgTable(
           and ${table.hiddenAt} is null
           and ${table.status} not in ('done', 'cancelled')`,
       ),
+    activeStaleRunEscalationIdx: uniqueIndex("issues_active_stale_run_escalation_uq")
+      .on(table.companyId, table.originKind, table.originId)
+      .where(
+        sql`${table.originKind} = 'stale_run_escalation'
+          and ${table.originId} is not null
+          and ${table.hiddenAt} is null
+          and ${table.status} not in ('done', 'cancelled')`,
+      ),
     activeProductivityReviewIdx: uniqueIndex("issues_active_productivity_review_uq")
       .on(table.companyId, table.originKind, table.originId)
       .where(

@@ -496,6 +496,139 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
     ).rejects.toMatchObject({ status: 403 });
   });
 
+  it("fires circuit-breaker and creates escalation issue at threshold evaluations", async () => {
+    const now = new Date("2026-04-22T20:00:00.000Z");
+    const { companyId, managerId, runId, issuePrefix } = await seedRunningRun({
+      now,
+      ageMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS + 60_000,
+    });
+    const heartbeat = heartbeatService(db);
+
+    for (let index = 0; index < 3; index += 1) {
+      const evaluationId = randomUUID();
+      await db.insert(issues).values({
+        id: evaluationId,
+        companyId,
+        title: `Stale run evaluation ${index + 1}`,
+        status: "done",
+        priority: "medium",
+        assigneeAgentId: managerId,
+        issueNumber: 100 + index,
+        identifier: `${issuePrefix}-${100 + index}`,
+        originKind: "stale_active_run_evaluation",
+        originId: runId,
+        originFingerprint: `stale_active_run:${companyId}:${runId}`,
+      });
+    }
+
+    const result = await heartbeat.scanSilentActiveRuns({ now, companyId });
+
+    expect(result.circuitBroken).toBe(1);
+    expect(result.created).toBe(0);
+
+    const escalations = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stale_run_escalation")));
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]).toMatchObject({
+      originId: runId,
+      priority: "high",
+      status: "todo",
+    });
+  });
+
+  it("does not fire circuit-breaker below evaluation threshold", async () => {
+    const now = new Date("2026-04-22T20:00:00.000Z");
+    const { companyId, managerId, runId, issuePrefix } = await seedRunningRun({
+      now,
+      ageMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS + 60_000,
+    });
+    const heartbeat = heartbeatService(db);
+
+    for (let index = 0; index < 2; index += 1) {
+      const evaluationId = randomUUID();
+      await db.insert(issues).values({
+        id: evaluationId,
+        companyId,
+        title: `Stale run evaluation ${index + 1}`,
+        status: "done",
+        priority: "medium",
+        assigneeAgentId: managerId,
+        issueNumber: 200 + index,
+        identifier: `${issuePrefix}-${200 + index}`,
+        originKind: "stale_active_run_evaluation",
+        originId: runId,
+        originFingerprint: `stale_active_run:${companyId}:${runId}`,
+      });
+    }
+
+    const result = await heartbeat.scanSilentActiveRuns({ now, companyId });
+
+    expect(result.created).toBe(1);
+    expect(result.circuitBroken).toBe(0);
+
+    const escalations = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stale_run_escalation")));
+    expect(escalations).toHaveLength(0);
+  });
+
+  it("circuit-breaker is idempotent: does not create duplicate escalation on repeated scans", async () => {
+    const now = new Date("2026-04-22T20:00:00.000Z");
+    const { companyId, managerId, runId, issuePrefix } = await seedRunningRun({
+      now,
+      ageMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS + 60_000,
+    });
+    const heartbeat = heartbeatService(db);
+
+    for (let index = 0; index < 3; index += 1) {
+      const evaluationId = randomUUID();
+      await db.insert(issues).values({
+        id: evaluationId,
+        companyId,
+        title: `Stale run evaluation ${index + 1}`,
+        status: "done",
+        priority: "medium",
+        assigneeAgentId: managerId,
+        issueNumber: 300 + index,
+        identifier: `${issuePrefix}-${300 + index}`,
+        originKind: "stale_active_run_evaluation",
+        originId: runId,
+        originFingerprint: `stale_active_run:${companyId}:${runId}`,
+      });
+    }
+
+    const escalationId = randomUUID();
+    await db.insert(issues).values({
+      id: escalationId,
+      companyId,
+      title: "Existing escalation",
+      status: "todo",
+      priority: "high",
+      assigneeAgentId: managerId,
+      issueNumber: 399,
+      identifier: `${issuePrefix}-399`,
+      originKind: "stale_run_escalation",
+      originId: runId,
+      originFingerprint: `stale_run_escalation:${companyId}:${runId}`,
+    });
+
+    const firstResult = await heartbeat.scanSilentActiveRuns({ now, companyId });
+    const secondResult = await heartbeat.scanSilentActiveRuns({ now, companyId });
+
+    expect(firstResult.circuitBroken).toBe(1);
+    expect(secondResult.circuitBroken).toBe(1);
+
+    const escalations = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stale_run_escalation")));
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]?.id).toBe(escalationId);
+  });
+
   it("validates createdByRunId before storing watchdog decisions", async () => {
     const now = new Date("2026-04-22T20:00:00.000Z");
     const { companyId, managerId, runId } = await seedRunningRun({
