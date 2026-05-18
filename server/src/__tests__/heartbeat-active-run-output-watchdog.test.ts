@@ -21,6 +21,7 @@ import {
   heartbeatService,
 } from "../services/heartbeat.ts";
 import { recoveryService } from "../services/recovery/service.ts";
+import { RECOVERY_ORIGIN_KINDS } from "../services/recovery/origins.ts";
 import { getRunLogStore } from "../services/run-log-store.ts";
 
 const mockAdapterExecute = vi.hoisted(() =>
@@ -182,6 +183,31 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
     }
     await db.update(issues).set({ executionRunId: runId }).where(eq(issues.id, issueId));
     return { companyId, managerId, coderId, issueId, runId, issuePrefix };
+  }
+
+  async function seedEvaluationIssues(opts: {
+    companyId: string;
+    managerId: string;
+    runId: string;
+    issuePrefix: string;
+    count: number;
+    issueNumberBase: number;
+  }) {
+    for (let index = 0; index < opts.count; index += 1) {
+      await db.insert(issues).values({
+        id: randomUUID(),
+        companyId: opts.companyId,
+        title: `Stale run evaluation ${index + 1}`,
+        status: "done",
+        priority: "medium",
+        assigneeAgentId: opts.managerId,
+        issueNumber: opts.issueNumberBase + index,
+        identifier: `${opts.issuePrefix}-${opts.issueNumberBase + index}`,
+        originKind: RECOVERY_ORIGIN_KINDS.staleActiveRunEvaluation,
+        originId: opts.runId,
+        originFingerprint: `stale_active_run:${opts.companyId}:${opts.runId}`,
+      });
+    }
   }
 
   it("creates one medium-priority evaluation issue for a suspicious silent run", async () => {
@@ -503,23 +529,7 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
       ageMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS + 60_000,
     });
     const heartbeat = heartbeatService(db);
-
-    for (let index = 0; index < 3; index += 1) {
-      const evaluationId = randomUUID();
-      await db.insert(issues).values({
-        id: evaluationId,
-        companyId,
-        title: `Stale run evaluation ${index + 1}`,
-        status: "done",
-        priority: "medium",
-        assigneeAgentId: managerId,
-        issueNumber: 100 + index,
-        identifier: `${issuePrefix}-${100 + index}`,
-        originKind: "stale_active_run_evaluation",
-        originId: runId,
-        originFingerprint: `stale_active_run:${companyId}:${runId}`,
-      });
-    }
+    await seedEvaluationIssues({ companyId, managerId, runId, issuePrefix, count: 3, issueNumberBase: 100 });
 
     const result = await heartbeat.scanSilentActiveRuns({ now, companyId });
 
@@ -529,7 +539,10 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
     const escalations = await db
       .select()
       .from(issues)
-      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stale_run_escalation")));
+      .where(and(
+        eq(issues.companyId, companyId),
+        eq(issues.originKind, RECOVERY_ORIGIN_KINDS.staleRunEscalation),
+      ));
     expect(escalations).toHaveLength(1);
     expect(escalations[0]).toMatchObject({
       originId: runId,
@@ -545,23 +558,7 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
       ageMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS + 60_000,
     });
     const heartbeat = heartbeatService(db);
-
-    for (let index = 0; index < 2; index += 1) {
-      const evaluationId = randomUUID();
-      await db.insert(issues).values({
-        id: evaluationId,
-        companyId,
-        title: `Stale run evaluation ${index + 1}`,
-        status: "done",
-        priority: "medium",
-        assigneeAgentId: managerId,
-        issueNumber: 200 + index,
-        identifier: `${issuePrefix}-${200 + index}`,
-        originKind: "stale_active_run_evaluation",
-        originId: runId,
-        originFingerprint: `stale_active_run:${companyId}:${runId}`,
-      });
-    }
+    await seedEvaluationIssues({ companyId, managerId, runId, issuePrefix, count: 2, issueNumberBase: 100 });
 
     const result = await heartbeat.scanSilentActiveRuns({ now, companyId });
 
@@ -571,7 +568,10 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
     const escalations = await db
       .select()
       .from(issues)
-      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stale_run_escalation")));
+      .where(and(
+        eq(issues.companyId, companyId),
+        eq(issues.originKind, RECOVERY_ORIGIN_KINDS.staleRunEscalation),
+      ));
     expect(escalations).toHaveLength(0);
   });
 
@@ -582,23 +582,7 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
       ageMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS + 60_000,
     });
     const heartbeat = heartbeatService(db);
-
-    for (let index = 0; index < 3; index += 1) {
-      const evaluationId = randomUUID();
-      await db.insert(issues).values({
-        id: evaluationId,
-        companyId,
-        title: `Stale run evaluation ${index + 1}`,
-        status: "done",
-        priority: "medium",
-        assigneeAgentId: managerId,
-        issueNumber: 300 + index,
-        identifier: `${issuePrefix}-${300 + index}`,
-        originKind: "stale_active_run_evaluation",
-        originId: runId,
-        originFingerprint: `stale_active_run:${companyId}:${runId}`,
-      });
-    }
+    await seedEvaluationIssues({ companyId, managerId, runId, issuePrefix, count: 3, issueNumberBase: 100 });
 
     const escalationId = randomUUID();
     await db.insert(issues).values({
@@ -608,9 +592,9 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
       status: "todo",
       priority: "high",
       assigneeAgentId: managerId,
-      issueNumber: 399,
-      identifier: `${issuePrefix}-399`,
-      originKind: "stale_run_escalation",
+      issueNumber: 200,
+      identifier: `${issuePrefix}-200`,
+      originKind: RECOVERY_ORIGIN_KINDS.staleRunEscalation,
       originId: runId,
       originFingerprint: `stale_run_escalation:${companyId}:${runId}`,
     });
@@ -624,7 +608,10 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
     const escalations = await db
       .select()
       .from(issues)
-      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stale_run_escalation")));
+      .where(and(
+        eq(issues.companyId, companyId),
+        eq(issues.originKind, RECOVERY_ORIGIN_KINDS.staleRunEscalation),
+      ));
     expect(escalations).toHaveLength(1);
     expect(escalations[0]?.id).toBe(escalationId);
   });

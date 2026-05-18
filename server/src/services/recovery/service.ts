@@ -991,7 +991,6 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     prefix: string;
     evidence: Awaited<ReturnType<typeof collectStaleRunEvidence>>;
     evalCount: number;
-    now: Date;
   }) {
     const sourceIssueLink = input.sourceIssue
       ? issueUiLink({ identifier: input.sourceIssue.identifier, id: input.sourceIssue.id }, input.prefix)
@@ -1035,7 +1034,14 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       runningAgent: input.runningAgent,
       sourceIssue: input.sourceIssue,
     });
-    const description = buildStaleRunEscalationDescription({ ...input });
+    const description = buildStaleRunEscalationDescription({
+      run: input.run,
+      runningAgent: input.runningAgent,
+      sourceIssue: input.sourceIssue,
+      prefix: input.prefix,
+      evidence: input.evidence,
+      evalCount: input.evalCount,
+    });
     const escalation = await issuesSvc.create(input.run.companyId, {
       title: `Manual intervention needed: ${input.runningAgent.name} run silent for ${formatDuration(input.evidence.silenceAgeMs)} (${input.evalCount} evaluations exhausted)`,
       description,
