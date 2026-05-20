@@ -21,6 +21,7 @@ import {
   heartbeatService,
 } from "../services/heartbeat.ts";
 import { recoveryService } from "../services/recovery/service.ts";
+import { RECOVERY_ORIGIN_KINDS } from "../services/recovery/origins.ts";
 import { getRunLogStore } from "../services/run-log-store.ts";
 
 const mockAdapterExecute = vi.hoisted(() =>
@@ -182,6 +183,31 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
     }
     await db.update(issues).set({ executionRunId: runId }).where(eq(issues.id, issueId));
     return { companyId, managerId, coderId, issueId, runId, issuePrefix };
+  }
+
+  async function seedEvaluationIssues(opts: {
+    companyId: string;
+    managerId: string;
+    runId: string;
+    issuePrefix: string;
+    count: number;
+    issueNumberBase: number;
+  }) {
+    for (let index = 0; index < opts.count; index += 1) {
+      await db.insert(issues).values({
+        id: randomUUID(),
+        companyId: opts.companyId,
+        title: `Stale run evaluation ${index + 1}`,
+        status: "done",
+        priority: "medium",
+        assigneeAgentId: opts.managerId,
+        issueNumber: opts.issueNumberBase + index,
+        identifier: `${opts.issuePrefix}-${opts.issueNumberBase + index}`,
+        originKind: RECOVERY_ORIGIN_KINDS.staleActiveRunEvaluation,
+        originId: opts.runId,
+        originFingerprint: `stale_active_run:${opts.companyId}:${opts.runId}`,
+      });
+    }
   }
 
   it("creates one medium-priority evaluation issue for a suspicious silent run", async () => {
@@ -494,6 +520,100 @@ describeEmbeddedPostgres("active-run output watchdog", () => {
         reason: "closed evaluation should not authorize",
       }),
     ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("fires circuit-breaker and creates escalation issue at threshold evaluations", async () => {
+    const now = new Date("2026-04-22T20:00:00.000Z");
+    const { companyId, managerId, runId, issuePrefix } = await seedRunningRun({
+      now,
+      ageMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS + 60_000,
+    });
+    const heartbeat = heartbeatService(db);
+    await seedEvaluationIssues({ companyId, managerId, runId, issuePrefix, count: 3, issueNumberBase: 100 });
+
+    const result = await heartbeat.scanSilentActiveRuns({ now, companyId });
+
+    expect(result.circuitBroken).toBe(1);
+    expect(result.created).toBe(0);
+
+    const escalations = await db
+      .select()
+      .from(issues)
+      .where(and(
+        eq(issues.companyId, companyId),
+        eq(issues.originKind, RECOVERY_ORIGIN_KINDS.staleRunEscalation),
+      ));
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]).toMatchObject({
+      originId: runId,
+      priority: "high",
+      status: "todo",
+    });
+  });
+
+  it("does not fire circuit-breaker below evaluation threshold", async () => {
+    const now = new Date("2026-04-22T20:00:00.000Z");
+    const { companyId, managerId, runId, issuePrefix } = await seedRunningRun({
+      now,
+      ageMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS + 60_000,
+    });
+    const heartbeat = heartbeatService(db);
+    await seedEvaluationIssues({ companyId, managerId, runId, issuePrefix, count: 2, issueNumberBase: 100 });
+
+    const result = await heartbeat.scanSilentActiveRuns({ now, companyId });
+
+    expect(result.created).toBe(1);
+    expect(result.circuitBroken).toBe(0);
+
+    const escalations = await db
+      .select()
+      .from(issues)
+      .where(and(
+        eq(issues.companyId, companyId),
+        eq(issues.originKind, RECOVERY_ORIGIN_KINDS.staleRunEscalation),
+      ));
+    expect(escalations).toHaveLength(0);
+  });
+
+  it("circuit-breaker is idempotent: does not create duplicate escalation on repeated scans", async () => {
+    const now = new Date("2026-04-22T20:00:00.000Z");
+    const { companyId, managerId, runId, issuePrefix } = await seedRunningRun({
+      now,
+      ageMs: ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS + 60_000,
+    });
+    const heartbeat = heartbeatService(db);
+    await seedEvaluationIssues({ companyId, managerId, runId, issuePrefix, count: 3, issueNumberBase: 100 });
+
+    const escalationId = randomUUID();
+    await db.insert(issues).values({
+      id: escalationId,
+      companyId,
+      title: "Existing escalation",
+      status: "todo",
+      priority: "high",
+      assigneeAgentId: managerId,
+      issueNumber: 200,
+      identifier: `${issuePrefix}-200`,
+      originKind: RECOVERY_ORIGIN_KINDS.staleRunEscalation,
+      originId: runId,
+      originFingerprint: `stale_run_escalation:${companyId}:${runId}`,
+    });
+
+    const firstResult = await heartbeat.scanSilentActiveRuns({ now, companyId });
+    const secondResult = await heartbeat.scanSilentActiveRuns({ now, companyId });
+
+    expect(firstResult.circuitBroken).toBe(1);
+    expect(secondResult.circuitBroken).toBe(1);
+
+    const escalations = await db
+      .select()
+      .from(issues)
+      .where(and(
+        eq(issues.companyId, companyId),
+        eq(issues.originKind, RECOVERY_ORIGIN_KINDS.staleRunEscalation),
+      ));
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]?.id).toBe(escalationId);
   });
 
   it("validates createdByRunId before storing watchdog decisions", async () => {

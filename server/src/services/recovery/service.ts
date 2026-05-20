@@ -63,6 +63,8 @@ export const ACTIVE_RUN_OUTPUT_CONTINUE_REARM_MS = 30 * 60 * 1000;
 const ACTIVE_RUN_OUTPUT_EVIDENCE_TAIL_BYTES = 8 * 1024;
 const STRANDED_ISSUE_RECOVERY_ORIGIN_KIND = RECOVERY_ORIGIN_KINDS.strandedIssueRecovery;
 const STALE_ACTIVE_RUN_EVALUATION_ORIGIN_KIND = RECOVERY_ORIGIN_KINDS.staleActiveRunEvaluation;
+const STALE_RUN_CIRCUIT_BREAKER_THRESHOLD = 3;
+const STALE_ACTIVE_RUN_ESCALATION_ORIGIN_KIND = RECOVERY_ORIGIN_KINDS.staleRunEscalation;
 const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 
 type RecoveryWakeupOptions = {
@@ -638,6 +640,10 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     return `stale_active_run:${companyId}:${runId}`;
   }
 
+  function staleRunEscalationOriginFingerprint(companyId: string, runId: string) {
+    return `stale_run_escalation:${companyId}:${runId}`;
+  }
+
   function silenceStartedAtForRun(run: Pick<typeof heartbeatRuns.$inferSelect, "lastOutputAt" | "processStartedAt" | "startedAt" | "createdAt">) {
     return run.lastOutputAt ?? run.processStartedAt ?? run.startedAt ?? run.createdAt ?? null;
   }
@@ -679,6 +685,37 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         and(
           eq(issues.companyId, companyId),
           eq(issues.originKind, STALE_ACTIVE_RUN_EVALUATION_ORIGIN_KIND),
+          eq(issues.originId, runId),
+          isNull(issues.hiddenAt),
+          notInArray(issues.status, ["done", "cancelled"]),
+        ),
+      )
+      .limit(1);
+    return row ?? null;
+  }
+
+  async function countStaleRunEvaluations(companyId: string, runId: string) {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, companyId),
+          eq(issues.originKind, STALE_ACTIVE_RUN_EVALUATION_ORIGIN_KIND),
+          eq(issues.originId, runId),
+        ),
+      );
+    return row?.count ?? 0;
+  }
+
+  async function findOpenStaleRunEscalation(companyId: string, runId: string) {
+    const [row] = await db
+      .select({ id: issues.id, status: issues.status })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, companyId),
+          eq(issues.originKind, STALE_ACTIVE_RUN_ESCALATION_ORIGIN_KIND),
           eq(issues.originId, runId),
           isNull(issues.hiddenAt),
           notInArray(issues.status, ["done", "cancelled"]),
@@ -947,6 +984,122 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       );
   }
 
+  function buildStaleRunEscalationDescription(input: {
+    run: typeof heartbeatRuns.$inferSelect;
+    runningAgent: typeof agents.$inferSelect;
+    sourceIssue: typeof issues.$inferSelect | null;
+    prefix: string;
+    evidence: Awaited<ReturnType<typeof collectStaleRunEvidence>>;
+    evalCount: number;
+  }) {
+    const sourceIssueLink = input.sourceIssue
+      ? issueUiLink({ identifier: input.sourceIssue.identifier, id: input.sourceIssue.id }, input.prefix)
+      : "none";
+    return [
+      "**This run has exhausted automatic evaluations. Manual review and intervention is required.**",
+      "",
+      `Paperclip attempted ${input.evalCount} stale-run evaluation(s) for this run without resolution. The circuit-breaker has fired to prevent unbounded evaluation spawning.`,
+      "",
+      "## Run",
+      "",
+      `- Run: ${runUiLink(input.run, input.prefix)}`,
+      `- Agent: ${input.runningAgent.name} (${input.runningAgent.adapterType})`,
+      `- Invocation: ${input.run.invocationSource}${input.run.triggerDetail ? ` / ${input.run.triggerDetail}` : ""}`,
+      `- Source issue: ${sourceIssueLink}`,
+      `- Started at: ${input.run.startedAt?.toISOString() ?? "unknown"}`,
+      `- Last output at: ${input.run.lastOutputAt?.toISOString() ?? "none recorded"}`,
+      `- Silent for: ${formatDuration(input.evidence.silenceAgeMs)}`,
+      `- Evaluations attempted: ${input.evalCount}`,
+      "",
+      "## Required Action",
+      "",
+      "- Review the run and determine whether it is truly stuck or still making progress.",
+      "- If stuck: cancel the run, recover any artifacts, and re-assign the work manually.",
+      "- If still running: snooze or cancel the stale-run evaluation system for this run.",
+      "- Close this issue once manual intervention is complete.",
+    ].join("\n");
+  }
+
+  async function createStaleRunEscalation(input: {
+    run: typeof heartbeatRuns.$inferSelect;
+    runningAgent: typeof agents.$inferSelect;
+    sourceIssue: typeof issues.$inferSelect | null;
+    evidence: Awaited<ReturnType<typeof collectStaleRunEvidence>>;
+    prefix: string;
+    evalCount: number;
+  }) {
+    const ownerAgentId = await resolveStaleRunOwnerAgentId({
+      run: input.run,
+      runningAgent: input.runningAgent,
+      sourceIssue: input.sourceIssue,
+    });
+    const description = buildStaleRunEscalationDescription({
+      run: input.run,
+      runningAgent: input.runningAgent,
+      sourceIssue: input.sourceIssue,
+      prefix: input.prefix,
+      evidence: input.evidence,
+      evalCount: input.evalCount,
+    });
+    const escalation = await issuesSvc.create(input.run.companyId, {
+      title: `Manual intervention needed: ${input.runningAgent.name} run silent for ${formatDuration(input.evidence.silenceAgeMs)} (${input.evalCount} evaluations exhausted)`,
+      description,
+      status: "todo",
+      priority: "high",
+      parentId: input.sourceIssue && !["done", "cancelled"].includes(input.sourceIssue.status)
+        ? input.sourceIssue.id
+        : null,
+      projectId: input.sourceIssue?.projectId ?? null,
+      goalId: input.sourceIssue?.goalId ?? null,
+      billingCode: input.sourceIssue?.billingCode ?? null,
+      assigneeAgentId: ownerAgentId,
+      assigneeAdapterOverrides: recoveryAssigneeAdapterOverrides(),
+      originKind: STALE_ACTIVE_RUN_ESCALATION_ORIGIN_KIND,
+      originId: input.run.id,
+      originRunId: input.run.id,
+      originFingerprint: staleRunEscalationOriginFingerprint(input.run.companyId, input.run.id),
+    });
+    await logActivity(db, {
+      companyId: input.run.companyId,
+      actorType: "system",
+      actorId: "system",
+      agentId: ownerAgentId,
+      runId: input.run.id,
+      action: "heartbeat.output_stale_circuit_broken",
+      entityType: "issue",
+      entityId: escalation.id,
+      details: {
+        source: "recovery.scan_silent_active_runs",
+        evalCount: input.evalCount,
+        sourceIssueId: input.sourceIssue?.id ?? null,
+        silenceAgeMs: input.evidence.silenceAgeMs,
+      },
+    });
+    if (ownerAgentId) {
+      await deps.enqueueWakeup(ownerAgentId, {
+        source: "assignment",
+        triggerDetail: "system",
+        reason: "issue_assigned",
+        payload: withRecoveryModelProfileHint({
+          issueId: escalation.id,
+          staleRunId: input.run.id,
+          sourceIssueId: input.sourceIssue?.id ?? null,
+        }),
+        requestedByActorType: "system",
+        requestedByActorId: null,
+        contextSnapshot: withRecoveryModelProfileHint({
+          issueId: escalation.id,
+          taskId: escalation.id,
+          wakeReason: "issue_assigned",
+          source: STALE_ACTIVE_RUN_ESCALATION_ORIGIN_KIND,
+          staleRunId: input.run.id,
+          sourceIssueId: input.sourceIssue?.id ?? null,
+        }),
+      });
+    }
+    return escalation;
+  }
+
   async function ensureSourceIssueBlockedByStaleEvaluation(input: {
     sourceIssue: typeof issues.$inferSelect | null;
     evaluationIssue: { id: string; identifier: string | null };
@@ -1030,6 +1183,24 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         });
       }
       return { kind: "existing" as const, evaluationIssueId: existing.id };
+    }
+
+    const existingEscalation = await findOpenStaleRunEscalation(input.run.companyId, input.run.id);
+    if (existingEscalation) {
+      return { kind: "circuit_broken" as const, escalationIssueId: existingEscalation.id };
+    }
+
+    const evalCount = await countStaleRunEvaluations(input.run.companyId, input.run.id);
+    if (evalCount >= STALE_RUN_CIRCUIT_BREAKER_THRESHOLD) {
+      const escalation = await createStaleRunEscalation({
+        run: input.run,
+        runningAgent,
+        sourceIssue,
+        evidence,
+        prefix,
+        evalCount,
+      });
+      return { kind: "circuit_broken" as const, escalationIssueId: escalation.id };
     }
 
     const ownerAgentId = await resolveStaleRunOwnerAgentId({ run: input.run, runningAgent, sourceIssue });
@@ -1139,6 +1310,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       escalated: 0,
       snoozed: 0,
       skipped: 0,
+      circuitBroken: 0,
       evaluationIssueIds: [] as string[],
     };
 
@@ -1151,6 +1323,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       if (outcome.kind === "created") result.created += 1;
       else if (outcome.kind === "existing") result.existing += 1;
       else if (outcome.kind === "escalated") result.escalated += 1;
+      else if (outcome.kind === "circuit_broken") result.circuitBroken += 1;
       else result.skipped += 1;
       if ("evaluationIssueId" in outcome && outcome.evaluationIssueId) {
         result.evaluationIssueIds.push(outcome.evaluationIssueId);
