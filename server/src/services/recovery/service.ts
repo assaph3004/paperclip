@@ -1026,7 +1026,6 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
     sourceIssue: typeof issues.$inferSelect | null;
     evidence: Awaited<ReturnType<typeof collectStaleRunEvidence>>;
     prefix: string;
-    now: Date;
     evalCount: number;
   }) {
     const ownerAgentId = await resolveStaleRunOwnerAgentId({
@@ -1199,7 +1198,6 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
         sourceIssue,
         evidence,
         prefix,
-        now: input.now,
         evalCount,
       });
       return { kind: "circuit_broken" as const, escalationIssueId: escalation.id };
