@@ -27,7 +27,7 @@ export function CompanySettingsSidebar() {
     },
     enabled: !!selectedCompanyId,
     retry: false,
-    refetchInterval: 15_000,
+    refetchInterval: 60_000,
   });
 
   return (
