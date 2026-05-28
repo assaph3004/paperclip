@@ -106,6 +106,7 @@ import {
   buildGroupedInboxSections,
   buildInboxIssueGroupCreateDefaults,
   buildInboxKeyboardNavEntries,
+  filterInboxIssues,
   getAvailableInboxIssueColumns,
   getInboxWorkItemKey,
   getApprovalsForTab,
@@ -652,6 +653,18 @@ function JoinRequestInboxRow({
   );
 }
 
+function ParentIssueFetcher({ parentId, onFetched }: { parentId: string; onFetched: (issue: Issue) => void }) {
+  const { data } = useQuery({
+    queryKey: ["issues", "detail", parentId],
+    queryFn: () => issuesApi.get(parentId),
+    staleTime: 5 * 60 * 1000,
+  });
+  useEffect(() => {
+    if (data) onFetched(data);
+  }, [data, onFetched]);
+  return null;
+}
+
 export function Inbox() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -848,8 +861,14 @@ export function Inbox() {
     [companyMembers?.users],
   );
 
-  const mineIssues = useMemo(() => getRecentTouchedIssues(mineIssuesRaw), [mineIssuesRaw]);
-  const touchedIssues = useMemo(() => getRecentTouchedIssues(touchedIssuesRaw), [touchedIssuesRaw]);
+  const mineIssues = useMemo(
+    () => getRecentTouchedIssues(filterInboxIssues(mineIssuesRaw, false)),
+    [mineIssuesRaw],
+  );
+  const touchedIssues = useMemo(
+    () => getRecentTouchedIssues(filterInboxIssues(touchedIssuesRaw, false)),
+    [touchedIssuesRaw],
+  );
   const visibleMineIssues = useMemo(
     () => applyIssueFilters(mineIssues, issueFilters, currentUserId, true, liveIssueIds),
     [mineIssues, issueFilters, currentUserId, liveIssueIds],
@@ -1445,6 +1464,15 @@ export function Inbox() {
   const [archivingNonIssueIds, setArchivingNonIssueIds] = useState<Set<string>>(new Set());
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const listRef = useRef<HTMLDivElement>(null);
+  const [expandedLazyIssueIds, setExpandedLazyIssueIds] = useState<Set<string>>(new Set());
+  const [onDemandIssueById, setOnDemandIssueById] = useState<Map<string, Issue>>(new Map());
+  const handleParentFetched = useCallback((parent: Issue) => {
+    setOnDemandIssueById((prev) => new Map(prev).set(parent.id, parent));
+  }, []);
+  const mergedIssueById = useMemo(
+    () => onDemandIssueById.size === 0 ? issueById : new Map([...issueById, ...onDemandIssueById]),
+    [issueById, onDemandIssueById],
+  );
 
   const invalidateInboxIssueQueries = () => {
     if (!selectedCompanyId) return;
@@ -2180,16 +2208,51 @@ export function Inbox() {
                   const isUnread = issue.isUnreadForMe && !fadingOutIssues.has(issue.id);
                   const isFading = fadingOutIssues.has(issue.id);
                   const isArchiving = archivingIssueIds.has(issue.id);
+                  const isLazyExpanded = expandedLazyIssueIds.has(issue.id);
+                  if (!isLazyExpanded) {
+                    const identifier = issue.identifier ?? issue.id.slice(0, 8);
+                    return (
+                      <div
+                        key={`issue:${issue.id}`}
+                        className={cn(
+                          "group flex items-center gap-2 border-b border-border py-2.5 pl-2 pr-3 last:border-b-0 sm:py-2 sm:pl-1 cursor-pointer transition-colors",
+                          selected ? "bg-accent/30" : "hover:bg-accent/50",
+                        )}
+                        onMouseEnter={() => setExpandedLazyIssueIds((prev) => new Set(prev).add(issue.id))}
+                        onClick={() => setExpandedLazyIssueIds((prev) => new Set(prev).add(issue.id))}
+                      >
+                        <span className="hidden sm:inline-flex h-4 w-4 shrink-0 items-center justify-center self-center">
+                          {isUnread ? (
+                            <span className={cn("block h-2 w-2 rounded-full bg-blue-600 dark:bg-blue-400 transition-opacity duration-300", isFading ? "opacity-0" : "opacity-100")} />
+                          ) : (
+                            <span className="inline-flex h-4 w-4" aria-hidden="true" />
+                          )}
+                        </span>
+                        <StatusIcon status={issue.status} blockerAttention={issue.blockerAttention} />
+                        <span className="font-mono text-xs text-muted-foreground shrink-0">{identifier}</span>
+                        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{issueActivityText(issue).toLowerCase()}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(issue.lastActivityAt ?? issue.updatedAt)}</span>
+                      </div>
+                    );
+                  }
                   const project = issue.projectId ? projectById.get(issue.projectId) ?? null : null;
                   const assigneeUserProfile = issue.assigneeUserId
                     ? companyUserProfileMap.get(issue.assigneeUserId) ?? null
                     : null;
                   return (
-                    <IssueRow
-                      key={`issue:${issue.id}`}
-                      issue={issue}
-                      issueLinkState={issueLinkState}
-                      selected={selected}
+                    <>
+                      {issue.parentId && !mergedIssueById.has(issue.parentId) && (
+                        <ParentIssueFetcher
+                          key={`pfetch:${issue.parentId}`}
+                          parentId={issue.parentId}
+                          onFetched={handleParentFetched}
+                        />
+                      )}
+                      <IssueRow
+                        key={`issue:${issue.id}`}
+                        issue={issue}
+                        issueLinkState={issueLinkState}
+                        selected={selected}
                       className={
                         isArchiving
                           ? "pointer-events-none -translate-x-4 scale-[0.98] opacity-0 transition-all duration-200 ease-out"
@@ -2267,12 +2330,13 @@ export function Inbox() {
                             }
                             assigneeUserAvatarUrl={assigneeUserProfile?.image ?? null}
                             currentUserId={currentUserId}
-                            parentIdentifier={issue.parentId ? (issueById.get(issue.parentId)?.identifier ?? null) : null}
-                            parentTitle={issue.parentId ? (issueById.get(issue.parentId)?.title ?? null) : null}
+                            parentIdentifier={issue.parentId ? (mergedIssueById.get(issue.parentId)?.identifier ?? null) : null}
+                            parentTitle={issue.parentId ? (mergedIssueById.get(issue.parentId)?.title ?? null) : null}
                           />
                         ) : undefined
                       }
                     />
+                    </>
                   );
                 };
 

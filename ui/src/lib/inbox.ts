@@ -387,9 +387,33 @@ export function shouldIncludeRoutineExecutionIssue(
   return !hideRoutineExecutions || issue.originKind !== "routine_execution";
 }
 
-export function filterInboxIssues(issues: Issue[], hideRoutineExecutions: boolean): Issue[] {
-  if (!hideRoutineExecutions) return issues;
-  return issues.filter((issue) => shouldIncludeRoutineExecutionIssue(issue, hideRoutineExecutions));
+const DONE_EXPIRE_MS = 3 * 24 * 60 * 60 * 1000;
+
+export function isIssueDoneExpired(
+  issue: Pick<Issue, "status" | "completedAt">,
+  now = Date.now(),
+): boolean {
+  if (issue.status !== "done") return false;
+  const completedMs = normalizeTimestamp(issue.completedAt);
+  if (completedMs === 0) return false;
+  return now - completedMs > DONE_EXPIRE_MS;
+}
+
+export function isIssueHiddenFromInbox(issue: Pick<Issue, "hiddenAt">): boolean {
+  return issue.hiddenAt != null;
+}
+
+export function filterInboxIssues(
+  issues: Issue[],
+  hideRoutineExecutions: boolean,
+  now = Date.now(),
+): Issue[] {
+  return issues.filter((issue) => {
+    if (isIssueHiddenFromInbox(issue)) return false;
+    if (isIssueDoneExpired(issue, now)) return false;
+    if (!shouldIncludeRoutineExecutionIssue(issue, hideRoutineExecutions)) return false;
+    return true;
+  });
 }
 
 export function matchesInboxIssueSearch(

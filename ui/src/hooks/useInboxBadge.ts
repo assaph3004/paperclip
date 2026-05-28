@@ -12,6 +12,7 @@ import { queryKeys } from "../lib/queryKeys";
 import {
   buildInboxDismissedAtByKey,
   computeInboxBadgeData,
+  filterInboxIssues,
   getRecentTouchedIssues,
   loadDismissedInboxAlerts,
   saveDismissedInboxAlerts,
@@ -186,7 +187,7 @@ export function useInboxBadge(companyId: string | null | undefined) {
     enabled: !!companyId,
   });
 
-  const mineIssues = useMemo(() => getRecentTouchedIssues(mineIssuesRaw), [mineIssuesRaw]);
+  const mineIssues = useMemo(() => getRecentTouchedIssues(filterInboxIssues(mineIssuesRaw, false)), [mineIssuesRaw]);
   const currentUserId = session?.user.id ?? session?.session.userId ?? null;
 
   const { data: heartbeatRuns = [] } = useQuery({
