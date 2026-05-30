@@ -14,7 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     wget \
     gnupg \
-    lsb-release \
     build-essential \
     libssl-dev \
     libffi-dev \
@@ -28,21 +27,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Make python3 and pip3 point to the specified version
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python${PYTHON_VERSION} 1 \
     && python3 -m pip install --upgrade pip
 
-# Node.js via NodeSource
+# Node.js via NodeSource; corepack enables pnpm/yarn without a separate install
 RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
     | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
     && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
     | tee /etc/apt/sources.list.d/nodesource.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable
 
-# Create a non-root dev user matching host UID/GID
+# Match host UID/GID to avoid bind-mount permission issues on Linux
 RUN groupadd --gid ${USER_GID} dev \
     && useradd --uid ${USER_UID} --gid ${USER_GID} --shell /bin/bash \
        --create-home --home-dir /home/dev dev \
