@@ -8,10 +8,8 @@ services:
         USER_GID: "${USER_GID:-1000}"
     volumes:
       - ../:/workspace:cached
-    working_dir: /workspace
     environment:
       POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
       POSTGRES_USER: "${POSTGRES_USER:-devuser}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-devpassword}"
       POSTGRES_DB: "${POSTGRES_DB:-devdb}"
@@ -22,7 +20,7 @@ services:
     command: sleep infinity
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     environment:
       POSTGRES_USER: "${POSTGRES_USER:-devuser}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-devpassword}"
@@ -33,7 +31,7 @@ services:
       timeout: 5s
       retries: 10
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 
