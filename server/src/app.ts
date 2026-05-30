@@ -406,7 +406,8 @@ export async function createApp(
 
   jobCoordinator.start();
   scheduler.start();
-  const archiveThresholdDays = Number(process.env.ARCHIVE_THRESHOLD_DAYS ?? "30");
+  const parsedThreshold = parseInt(process.env.ARCHIVE_THRESHOLD_DAYS ?? "", 10);
+  const archiveThresholdDays = Number.isFinite(parsedThreshold) && parsedThreshold > 0 ? parsedThreshold : 30;
   const issueArchiver = createIssueArchiver(db);
   void issueArchiver.archiveStaleIssues(archiveThresholdDays).catch((err) => {
     logger.error({ err }, "Failed to run initial issue archiver");

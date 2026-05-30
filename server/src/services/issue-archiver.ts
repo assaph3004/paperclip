@@ -1,4 +1,4 @@
-import { and, isNull, lt, or, sql } from "drizzle-orm";
+import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { issues } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
@@ -14,8 +14,8 @@ export function createIssueArchiver(db: Db) {
           and(
             isNull(issues.hiddenAt),
             or(
-              and(sql`${issues.status} = 'done'`, lt(issues.completedAt, cutoff)),
-              and(sql`${issues.status} = 'cancelled'`, lt(issues.cancelledAt, cutoff)),
+              and(eq(issues.status, "done"), lt(issues.completedAt, cutoff)),
+              and(eq(issues.status, "cancelled"), lt(issues.cancelledAt, cutoff)),
             )!,
           ),
         )
