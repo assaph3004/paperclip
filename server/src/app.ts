@@ -54,6 +54,7 @@ import { buildHostServices, flushPluginLogBuffer } from "./services/plugin-host-
 import { createPluginEventBus } from "./services/plugin-event-bus.js";
 import { setPluginEventBus } from "./services/activity-log.js";
 import { createPluginDevWatcher } from "./services/plugin-dev-watcher.js";
+import { createIssueArchiver } from "./services/issue-archiver.js";
 import { createPluginHostServiceCleanup } from "./services/plugin-host-service-cleanup.js";
 import { pluginRegistryService } from "./services/plugin-registry.js";
 import { createHostClientHandlers } from "@paperclipai/plugin-sdk";
@@ -62,6 +63,7 @@ import { createCachedViteHtmlRenderer } from "./vite-html-renderer.js";
 
 type UiMode = "none" | "static" | "vite-dev";
 const FEEDBACK_EXPORT_FLUSH_INTERVAL_MS = 5_000;
+const ARCHIVE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const VITE_DEV_ASSET_PREFIXES = [
   "/@fs/",
   "/@id/",
@@ -404,6 +406,17 @@ export async function createApp(
 
   jobCoordinator.start();
   scheduler.start();
+  const archiveThresholdDays = Number(process.env.ARCHIVE_THRESHOLD_DAYS ?? "30");
+  const issueArchiver = createIssueArchiver(db);
+  void issueArchiver.archiveStaleIssues(archiveThresholdDays).catch((err) => {
+    logger.error({ err }, "Failed to run initial issue archiver");
+  });
+  const archiveTimer = setInterval(() => {
+    void issueArchiver.archiveStaleIssues(archiveThresholdDays).catch((err) => {
+      logger.error({ err }, "Failed to run periodic issue archiver");
+    });
+  }, ARCHIVE_INTERVAL_MS);
+  archiveTimer.unref();
   const feedbackExportTimer = opts.feedbackExportService
     ? setInterval(() => {
       void opts.feedbackExportService?.flushPendingFeedbackTraces().catch((err) => {
@@ -437,6 +450,7 @@ export async function createApp(
     logger.error({ err }, "Failed to load ready plugins on startup");
   });
   process.once("exit", () => {
+    clearInterval(archiveTimer);
     if (feedbackExportTimer) clearInterval(feedbackExportTimer);
     devWatcher?.close();
     viteHtmlRenderer?.dispose();
