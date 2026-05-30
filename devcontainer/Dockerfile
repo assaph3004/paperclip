@@ -40,7 +40,10 @@ RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
-    && corepack enable
+    && corepack enable \
+    && npm install -g @anthropic-ai/claude-code
+
+RUN pip install --no-cache-dir openai
 
 # Match host UID/GID to avoid bind-mount permission issues on Linux
 RUN groupadd --gid ${USER_GID} dev \
