@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     zip \
     sudo \
+    postgresql-client \
     python${PYTHON_VERSION} \
     python${PYTHON_VERSION}-venv \
     python${PYTHON_VERSION}-dev \
