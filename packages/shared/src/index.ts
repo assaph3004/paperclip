@@ -1,3 +1,5 @@
+export { repr } from "./assert.js";
+export { MS_PER_DAY, daysToMs } from "./time.js";
 export { agentAdapterTypeSchema, optionalAgentAdapterTypeSchema } from "./adapter-type.js";
 export {
   COMPANY_STATUSES,
