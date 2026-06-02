@@ -1443,6 +1443,7 @@ export function issueRoutes(
       includePluginOperations:
         req.query.includePluginOperations === "true" || req.query.includePluginOperations === "1",
       includeBlockedBy: req.query.includeBlockedBy === "true" || req.query.includeBlockedBy === "1",
+      includeArchived: req.query.includeArchived === "true" || req.query.includeArchived === "1",
       q: req.query.q as string | undefined,
       limit,
       offset,

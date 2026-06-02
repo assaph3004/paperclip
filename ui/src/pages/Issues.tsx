@@ -62,6 +62,7 @@ export function Issues() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const fetchNextPageInFlightRef = useRef(false);
+  const [includeArchived, setIncludeArchived] = useState(false);
 
   const urlSearch = searchParams.get("q") ?? "";
   const [searchOverride, setSearchOverride] = useState<{ search: string; locationSearch: string } | null>(null);
@@ -136,6 +137,7 @@ export function Issues() {
       "workspace",
       workspaceIdFilter ?? "__all__",
       "with-routine-executions",
+      includeArchived ? "with-archived" : "without-archived",
       "infinite",
       issuePageSize,
     ],
@@ -143,6 +145,7 @@ export function Issues() {
       participantAgentId,
       workspaceId: workspaceIdFilter,
       includeRoutineExecutions: true,
+      ...(includeArchived ? { includeArchived: true } : {}),
       limit: issuePageSize,
       offset: pageParam,
     }),
@@ -196,6 +199,8 @@ export function Issues() {
       onLoadMoreIssues={loadMoreServerIssues}
       onUpdateIssue={(id, data) => updateIssue.mutate({ id, data })}
       searchFilters={participantAgentId || workspaceIdFilter ? { participantAgentId, workspaceId: workspaceIdFilter } : undefined}
+      includeArchived={includeArchived}
+      onIncludeArchivedChange={setIncludeArchived}
     />
   );
 }
