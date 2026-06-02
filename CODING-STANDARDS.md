@@ -68,3 +68,75 @@ export class RecoveryService {
   async resolveStaleRun(/* … */) { /* … */ }
 }
 ```
+
+## Rule 5 — File size: 300 / 500 / 200 lines
+
+Soft caps: 300 for utility files, 500 for service files, 200 for route files. A file growing past its cap is a signal to decompose — extract sub-modules (e.g. `recovery/service.ts` → `service.ts` + `escalation.ts` + `watchdog.ts`), not to bump the cap. If a file genuinely cannot be split (generated code, single-purpose schema), add a one-line module-top docstring linking the `DESIGN-DECISIONS.md` entry that justifies the size.
+
+**Wrong:** `routes/issues.ts` at 4000+ lines mixing read/write/comments/recovery handlers.
+
+**Right:** `routes/issues/read.ts` + `routes/issues/write.ts` + `routes/issues/comments.ts`, each under 500 lines.
+
+## Rule 6 — Boolean flag parameters are opaque at call sites
+
+A bare `boolean` parameter forces every reader to look up which side of the boolean does what. Replace with a named options object or two separate functions.
+
+**Wrong:** `filterInboxIssues(issues, false)` — what does `false` mean here? Hidden? Archived? Already filtered?
+
+**Right:** `filterInboxIssues(issues, { includeArchived: false })` — or split into `filterUnarchivedInboxIssues(issues)` and `filterAllInboxIssues(issues)`.
+
+## Rule 7 — Components that exist only to fire effects are hooks, not components
+
+If a component renders `null` and exists only to run `useQuery` + `useEffect`, that is a hook. Returning `null` from JSX is a code smell that masks state-only logic as UI.
+
+**Wrong:**
+
+```tsx
+function ParentIssueFetcher({ issueId, onLoaded }: Props) {
+  const { data } = useQuery({ queryKey: ["parent", issueId], queryFn: () => fetchParent(issueId) });
+  useEffect(() => { if (data) onLoaded(data); }, [data, onLoaded]);
+  return null;
+}
+```
+
+**Right:**
+
+```ts
+export function useParentIssue(issueId: string) {
+  return useQuery({ queryKey: ["parent", issueId], queryFn: () => fetchParent(issueId) });
+}
+```
+
+Callers read `parent` directly from the hook's return value — no side-effect indirection.
+
+## Rule 8 — Extract magic numbers shared across modules
+
+A value repeated in 3+ files is shared infrastructure, not a per-file constant. Move it to a colocated constants module and import from there.
+
+**Wrong:** `refetchInterval: 60_000` hardcoded in `Sidebar.tsx`, `SidebarAgents.tsx`, `Inbox.tsx`, `Issues.tsx`, `CompanySettingsSidebar.tsx`. Tests redefine `THREE_DAYS_MS` locally instead of importing the production constant.
+
+**Right:** `ui/src/lib/poll-intervals.ts` exports `LIVE_RUNS_REFETCH_INTERVAL_MS = 60_000` and `DONE_EXPIRE_MS = daysToMs(3)`; every site imports from there.
+
+## Rule 9 — No dual-mode optional parameters; use a discriminated union or finish the migration
+
+If a function accepts both `mineIssues?: Issue[]` AND `mineIssueCount?: number` as mutually-exclusive alternatives, TypeScript will not catch the case where neither is passed. Either complete the migration (drop the old form) or model the two modes as a discriminated union so the type system enforces it.
+
+**Wrong:**
+
+```ts
+function computeInboxBadgeData(opts: { mineIssues?: Issue[]; mineIssueCount?: number; ... }) {
+  // both optional — caller can pass neither, compiler is silent
+}
+```
+
+**Right (discriminated union):**
+
+```ts
+type MineInput =
+  | { kind: "issues"; mineIssues: Issue[] }
+  | { kind: "count"; mineIssueCount: number };
+
+function computeInboxBadgeData(opts: MineInput & { ... }) { /* … */ }
+```
+
+Or finish the migration: drop `mineIssues`, require `mineIssueCount`.
