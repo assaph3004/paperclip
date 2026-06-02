@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { and, eq, isNotNull, isNull, lt, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { executionWorkspaces, issues } from "@paperclipai/db";
+import { daysToMs, repr } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 
 const execFileAsync = promisify(execFile);
@@ -32,12 +33,12 @@ async function isBranchMergedIntoBase(cwd: string, baseRef: string): Promise<boo
 }
 
 export function createAutoArchiveService(db: Db) {
-  async function runOnce(): Promise<{ archived: number }> {
+  async function archiveStaleIssues(): Promise<{ archived: number }> {
     let archived = 0;
     const now = new Date();
 
     // 1. Cancelled issues older than CANCELLED_ARCHIVE_DAYS
-    const cancelledCutoff = new Date(now.getTime() - CANCELLED_ARCHIVE_DAYS * 24 * 60 * 60 * 1000);
+    const cancelledCutoff = new Date(now.getTime() - daysToMs(CANCELLED_ARCHIVE_DAYS));
     const cancelledRows = await db
       .select({ id: issues.id })
       .from(issues)
@@ -51,21 +52,27 @@ export function createAutoArchiveService(db: Db) {
       );
 
     // 2. Review system issues (by title prefix) that are done/cancelled older than REVIEW_ISSUE_ARCHIVE_DAYS
-    const reviewCutoff = new Date(now.getTime() - REVIEW_ISSUE_ARCHIVE_DAYS * 24 * 60 * 60 * 1000);
+    const reviewCutoff = new Date(now.getTime() - daysToMs(REVIEW_ISSUE_ARCHIVE_DAYS));
     const reviewRows = await db
       .select({ id: issues.id })
       .from(issues)
       .where(
         and(
           isNull(issues.hiddenAt),
-          or(...REVIEW_TITLE_PREFIXES.map((prefix) => sql<boolean>`${issues.title} LIKE ${prefix + "%"}`))!,
-          or(eq(issues.status, "done"), eq(issues.status, "cancelled"))!,
+          repr(
+            or(...REVIEW_TITLE_PREFIXES.map((prefix) => sql<boolean>`${issues.title} LIKE ${prefix + "%"}`)),
+            "auto-archive review title-prefix filter",
+          ),
+          repr(
+            or(eq(issues.status, "done"), eq(issues.status, "cancelled")),
+            "auto-archive review status filter",
+          ),
           lt(issues.updatedAt, reviewCutoff),
         ),
       );
 
     // 3. Done issues with linked execution workspace whose branch is merged — archive after MERGED_PR_ARCHIVE_DAYS
-    const mergedCutoff = new Date(now.getTime() - MERGED_PR_ARCHIVE_DAYS * 24 * 60 * 60 * 1000);
+    const mergedCutoff = new Date(now.getTime() - daysToMs(MERGED_PR_ARCHIVE_DAYS));
     const workspaceRows = await db
       .select({
         id: issues.id,
@@ -101,8 +108,8 @@ export function createAutoArchiveService(db: Db) {
 
     // Collect all unique IDs to archive
     const toArchiveIds = new Set<string>([
-      ...cancelledRows.map((r) => r.id),
-      ...reviewRows.map((r) => r.id),
+      ...cancelledRows.map((row) => row.id),
+      ...reviewRows.map((row) => row.id),
       ...mergedIssueIds,
     ]);
 
@@ -126,12 +133,12 @@ export function createAutoArchiveService(db: Db) {
 
   function start(): () => void {
     // Run once immediately on startup
-    void runOnce().catch((err) => {
+    void archiveStaleIssues().catch((err) => {
       logger.error({ err }, "auto-archive: startup run failed");
     });
 
     const timer = setInterval(() => {
-      void runOnce().catch((err) => {
+      void archiveStaleIssues().catch((err) => {
         logger.error({ err }, "auto-archive: periodic run failed");
       });
     }, AUTO_ARCHIVE_INTERVAL_MS);
@@ -140,5 +147,5 @@ export function createAutoArchiveService(db: Db) {
     return () => clearInterval(timer);
   }
 
-  return { runOnce, start };
+  return { archiveStaleIssues, start };
 }

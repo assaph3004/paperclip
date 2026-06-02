@@ -378,8 +378,8 @@ interface IssuesListProps {
   onLoadMoreIssues?: () => void;
   onSearchChange?: (search: string) => void;
   onUpdateIssue: (id: string, data: Record<string, unknown>) => void;
-  showArchived?: boolean;
-  onShowArchivedChange?: (show: boolean) => void;
+  includeArchived?: boolean;
+  onIncludeArchivedChange?: (includeArchived: boolean) => void;
 }
 
 function IssueSearchInput({
@@ -587,8 +587,8 @@ export function IssuesList({
   onLoadMoreIssues,
   onSearchChange,
   onUpdateIssue,
-  showArchived = false,
-  onShowArchivedChange,
+  includeArchived = false,
+  onIncludeArchivedChange,
 }: IssuesListProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const { selectedCompanyId } = useCompany();
@@ -1351,13 +1351,13 @@ export function IssuesList({
             workspaces={isolatedWorkspacesEnabled ? workspaceOptions : undefined}
           />
 
-          {onShowArchivedChange && (
+          {onIncludeArchivedChange && (
             <Button
-              variant={showArchived ? "secondary" : "outline"}
+              variant={includeArchived ? "secondary" : "outline"}
               size="icon"
               className="h-8 w-8 shrink-0"
-              title={showArchived ? "Hide archived issues" : "Show archived issues"}
-              onClick={() => onShowArchivedChange(!showArchived)}
+              title={includeArchived ? "Hide archived issues" : "Show archived issues"}
+              onClick={() => onIncludeArchivedChange(!includeArchived)}
             >
               <Archive className="h-3.5 w-3.5" />
             </Button>

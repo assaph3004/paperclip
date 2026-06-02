@@ -139,7 +139,7 @@ export interface IssueFilters {
   excludeRoutineExecutions?: boolean;
   includePluginOperations?: boolean;
   includeBlockedBy?: boolean;
-  showArchived?: boolean;
+  includeArchived?: boolean;
   q?: string;
   limit?: number;
   offset?: number;
@@ -2336,7 +2336,7 @@ export function issueService(db: Db) {
       if (filters?.excludeRoutineExecutions && !filters?.originKind && !filters?.originId) {
         conditions.push(ne(issues.originKind, "routine_execution"));
       }
-      if (!filters?.showArchived) {
+      if (!filters?.includeArchived) {
         conditions.push(isNull(issues.hiddenAt));
       }
 
